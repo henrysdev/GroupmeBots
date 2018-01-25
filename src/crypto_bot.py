@@ -5,22 +5,27 @@ import time
 import configparser
 import string
 import re
+import sys
 import coinmarketcap as cmc_api
 
+# globals
 BASE_URL = 'https://api.groupme.com/v3'
 AUTH_TOKEN = None
 GROUP_ID = None
 BOT_ID = None
 LOGGER_BOT_ID = None
 LAST_ID = 0
+RANKS_LIMIT = 5
 
 
+# carry out approved command 
 def execute_command(cmd, args):
     if cmd == "help":
         try:
             msg_txt = "POEbot Commands List\n\n"
             msg_txt += "!price <ticker>\n"
             msg_txt += "!stats <ticker>\n"
+            msg_txt += "!top <# top coins>\n"
             msg_txt += "!help"
             send_message(msg_txt)
             return True
@@ -93,6 +98,7 @@ def validate_ticker(ticker):
     logger("ticker does not check out")
     return False
 
+# check to ensure valid commands are being passed
 def validate_input(cmd, args):
     if cmd   == "help":
         if args == None:
@@ -106,13 +112,14 @@ def validate_input(cmd, args):
     elif cmd == "top":
         try:
             ranks = int(args[0])
-            if ranks <= 10:
+            if ranks <= RANKS_LIMIT:
                 return True
         except:
             logger("invalid argument")
             return False
     return False
 
+# ensure that commands and arguments are of the right format
 def parse_for_commands(msg):
     regex = r"(![A-z]{3,5})(( [A-z\d]+){1,5})*"
     r = re.compile(regex)
@@ -127,10 +134,12 @@ def parse_for_commands(msg):
         logger("args: {}".format(args))
         logger('\n')
         cmd = cmd.lower()
-        if validate_input(cmd, args):
-            logger("√ command input checks out")
-            execute_command(cmd, args)
+        if args is not None or cmd == "help":
+            if validate_input(cmd, args):
+                logger("√ command input checks out")
+                execute_command(cmd, args)
 
+# update function that checks new messages for commands
 def refresh_messages():
     global LAST_ID
     url = '{0}/groups/{1}/messages'.format(BASE_URL, GROUP_ID)
@@ -145,26 +154,33 @@ def refresh_messages():
             headers=headers,
             params=params 
         )
+    except:
+        logger("http GET request failed [refresh_messages]")
+        return
+    try:
+        json_resp = json.loads(resp.text)
+    except:
+        logger("unable to parse into json")
+        return
+    if json_resp is not None:
         try:
-            json_resp = json.loads(resp.text)
-        except:
-            logger("unable to parse into json")
-            return
-        if json_resp is not None:
             fetched_msgs = json_resp['response']['messages']
             if len(fetched_msgs) > 0:
                 for msg in fetched_msgs:
                     parse_for_commands(msg)
                 LAST_ID = fetched_msgs[0]['id']
-        else:
-            logger("json not subscriptable")
-    except:
-        logger("http GET request failed")
+        except:
+            return
+    else:
+        logger("json not subscriptable")
+        return
 
+# debugging module
 def logger(message):
     print(message)
     #send_message(message, logging=True)
 
+# sends message to GroupMe group
 def send_message(message, logging=False):
     bot_id = BOT_ID
     if logging:
@@ -193,6 +209,7 @@ def send_message(message, logging=False):
         else:
             logger("http POST request failed")
 
+# obtain the id for the last message sent in a group
 def get_last_message_id():
     url = '{0}/groups/{1}/messages'.format(BASE_URL, GROUP_ID)
     headers = {"Content-Type": "application/json"}
@@ -210,10 +227,11 @@ def get_last_message_id():
         last_id = json_resp['response']['messages'][0]['id']
         return last_id
     except:
-        logger("http GET request failed")
+        logger("http GET request failed [get_last_message_id]")
         return None
 
-def load_config():
+# load in parameters from config file
+def load_config(mode):
     global AUTH_TOKEN
     global BOT_ID
     global GROUP_ID
@@ -221,22 +239,30 @@ def load_config():
     config = configparser.ConfigParser()
     config.read('config.ini')
     AUTH_TOKEN = config['CREDENTIALS']['auth_token']
-    GROUP_ID = config['IDENTIFIERS']['dev_group_id']
-    BOT_ID = config['IDENTIFIERS']['dev_bot_id']
+    if mode == "DEV":
+        GROUP_ID = config['IDENTIFIERS']['dev_group_id']
+        BOT_ID = config['IDENTIFIERS']['dev_bot_id']
+    elif mode == "PROD":
+        GROUP_ID = config['IDENTIFIERS']['prod_group_id']
+        BOT_ID = config['IDENTIFIERS']['prod_bot_id']
     LOGGER_BOT_ID = config['IDENTIFIERS']['logger_bot_id']
 
+# start function for preprocessing
 def init_bot():
     global LAST_ID
     LAST_ID = get_last_message_id()
 
+# main update container function
 def main_loop():
     while True:
-        try:
-            refresh_messages()
-        except:
-            logger("cant refresh")
+        refresh_messages()
 
 if __name__ == "__main__":
-    load_config()
+    mode = "DEV"
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "1":
+            mode = "PROD"
+    logger("mode: {}".format(mode))
+    load_config(mode)
     init_bot()
     main_loop()
